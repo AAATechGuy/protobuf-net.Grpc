@@ -96,11 +96,11 @@ namespace ProtoBuf.Grpc.Internal
         internal static Func<CallInvoker, TService> CreateFactory<TService>(BinderConfiguration binderConfig, out Type concreteType)
            where TService : class
         {
-            var baseType = typeof(ClientBase);
-
             // front-load reflection discovery
             if (!typeof(TService).IsInterface)
                 throw new InvalidOperationException("Type is not an interface: " + typeof(TService).FullName);
+
+            var baseType = typeof(Client.CodeFirstClient<>).MakeGenericType(typeof(TService));
 
             var callInvoker = baseType.GetProperty("CallInvoker", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetGetMethod(true);
             if (callInvoker == null || callInvoker.ReturnType != typeof(CallInvoker) || callInvoker.GetParameters().Length != 0)

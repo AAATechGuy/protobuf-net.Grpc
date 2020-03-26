@@ -22,7 +22,7 @@ namespace ProtoBuf.Grpc.Server
         /// <summary>
         /// Registers a provider that can recognize and handle code-first services
         /// </summary>
-        public static IGrpcServerBuilder AddCodeFirstGrpc(this IServiceCollection services, Action<GrpcServiceOptions>? configureOptions)
+        public static IGrpcServerBuilder AddCodeFirstGrpc(this IServiceCollection services, Action<GrpcServiceOptions>? configureOptions = null)
         {
             var builder = configureOptions == null ? services.AddGrpc() : services.AddGrpc(configureOptions);
             services.TryAddEnumerable(ServiceDescriptor.Singleton(typeof(IServiceMethodProvider<>), typeof(CodeFirstServiceMethodProvider<>)));
