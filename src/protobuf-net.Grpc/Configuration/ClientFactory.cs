@@ -37,20 +37,19 @@ namespace ProtoBuf.Grpc.Configuration
         /// Create a service-client backed by a CallInvoker
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public TService CreateClient<TService>(CallInvoker channel) where TService : class
-#pragma warning disable CS0618 // SimpleClientBase is marked Obsolete to discourage usage
-            => CreateClient<SimpleClientBase, TService, CallInvoker>(channel);
-#pragma warning restore CS0618
+        public abstract TService CreateClient<TService>(CallInvoker channel) where TService : class;
+
+        /// <summary>
+        /// Gets the concrete client type that would provide this service
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public abstract Type GetClientType<TService>() where TService : class;
 
         /// <summary>
         /// Create a service-client backed by a CallInvoker
         /// </summary>
         public virtual GrpcClient CreateClient(CallInvoker channel, Type contractType)
             => new GrpcClient(channel, contractType, BinderConfiguration);
-
-        // TODO: remove this, standardizing on SimpleClient (or LiteClientBase) and CallInvoker?
-        internal abstract TService CreateClient<TBase, TService, TChannel>(TChannel channel) where TService : class;
-
 
         private sealed class ConfiguredClientFactory : ClientFactory
         {
@@ -61,30 +60,54 @@ namespace ProtoBuf.Grpc.Configuration
                 BinderConfiguration = binderConfiguration ?? BinderConfiguration.Default;
             }
 
-            private readonly ConcurrentDictionary<(Type, Type, Type), object> _proxyCache = new ConcurrentDictionary<(Type, Type, Type), object>();
+            private readonly struct StubPair
+            {
+                public readonly Delegate Factory;
+                public readonly Type ConcreteType;
+                public StubPair (Delegate factory, Type concreteType)
+                {
+                    Factory = factory;
+                    ConcreteType = concreteType;
+                }
+            }
+            private readonly ConcurrentDictionary<Type, StubPair> _stubCache = new ConcurrentDictionary<Type, StubPair>();
 
             [MethodImpl(MethodImplOptions.NoInlining)]
-            private TService SlowCreateClient<TBase, TService, TChannel>(TChannel channel)
+            private StubPair SlowCreateStub<TService>()
                 where TService : class
             {
-                var factory = ProxyEmitter.CreateFactory<TChannel, TService>(typeof(TBase), BinderConfiguration);
-                var key = (typeof(TBase), typeof(TService), typeof(TChannel));
+                var factory = ProxyEmitter.CreateFactory<TService>(BinderConfiguration, out var concreteType);
+                var stub = new StubPair(factory, concreteType);
 
-                if (!_proxyCache.TryAdd(key, factory)) factory = (Func<TChannel, TService>)_proxyCache[key];
-                return factory(channel);
+                var key = typeof(TService);
+                return _stubCache.TryAdd(key, stub) ? stub : _stubCache[key];
             }
-            internal override TService CreateClient<TBase, TService, TChannel>(TChannel channel)
+            public override TService CreateClient<TService>(CallInvoker channel)
                 where TService : class
             {
-                if (_proxyCache.TryGetValue((typeof(TBase), typeof(TService), typeof(TChannel)), out var obj))
-                    return ((Func<TChannel, TService>)obj)(channel);
-                return SlowCreateClient<TBase, TService, TChannel>(channel);
+                if (!_stubCache.TryGetValue(typeof(TService), out var stub))
+                {
+                    stub = SlowCreateStub<TService>();
+                }
+                return ((Func<CallInvoker, TService>)stub.Factory)(channel);
+            }
+
+            public override Type GetClientType<TService>()
+            {
+                if (!_stubCache.TryGetValue(typeof(TService), out var stub))
+                {
+                    stub = SlowCreateStub<TService>();
+                }
+                return stub.ConcreteType;
             }
         }
 
-        internal static class DefaultProxyCache<TBase, TService, TChannel> where TService : class
+        internal static class DefaultProxyCache<TService> where TService : class
         {
-            internal static readonly Func<TChannel, TService> Create = ProxyEmitter.CreateFactory<TChannel, TService>(typeof(TBase), BinderConfiguration.Default);
+#pragma warning disable CS8618 // Non-nullable field is uninitialized - actually initialized vs "out"
+            internal static readonly Type ConcreteType;
+#pragma warning restore CS8618
+            internal static readonly Func<CallInvoker, TService> Create = ProxyEmitter.CreateFactory<TService>(BinderConfiguration.Default, out ConcreteType);
         }
 
         private sealed class DefaultClientFactory : ClientFactory
@@ -94,7 +117,9 @@ namespace ProtoBuf.Grpc.Configuration
             public static readonly DefaultClientFactory Instance = new DefaultClientFactory();
             private DefaultClientFactory() { }
 
-            internal override TService CreateClient<TBase, TService, TChannel>(TChannel channel) => DefaultProxyCache<TBase, TService, TChannel>.Create(channel);
+            public override TService CreateClient<TService>(CallInvoker channel) => DefaultProxyCache<TService>.Create(channel);
+
+            public override Type GetClientType<TService>() => DefaultProxyCache<TService>.ConcreteType;
         }
     }
 }

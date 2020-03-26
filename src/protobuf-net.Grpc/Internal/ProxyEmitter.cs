@@ -93,10 +93,10 @@ namespace ProtoBuf.Grpc.Internal
         static int _typeIndex;
         private static readonly MethodInfo s_marshallerCacheGenericMethodDef
             = typeof(MarshallerCache).GetMethod(nameof(MarshallerCache.GetMarshaller), BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!;
-        internal static Func<TChannel, TService> CreateFactory<TChannel, TService>(Type baseType, BinderConfiguration binderConfig)
+        internal static Func<CallInvoker, TService> CreateFactory<TService>(BinderConfiguration binderConfig, out Type concreteType)
            where TService : class
         {
-            if (baseType == null) throw new ArgumentNullException(nameof(baseType));
+            var baseType = typeof(ClientBase);
 
             // front-load reflection discovery
             if (!typeof(TService).IsInterface)
@@ -115,7 +115,7 @@ namespace ProtoBuf.Grpc.Internal
                 type.SetParent(baseType);
 
                 // public IFooProxy(CallInvoker callInvoker) : base(callInvoker) { }
-                var ctorCallInvoker = WritePassThruCtor<TChannel>(MethodAttributes.Public);
+                var ctorCallInvoker = WritePassThruCtor<CallInvoker>(MethodAttributes.Public);
 
                 // override ToString
                 {
@@ -124,7 +124,7 @@ namespace ProtoBuf.Grpc.Internal
                     typeof(string), Type.EmptyTypes);
                     var il = toString.GetILGenerator();
                     if (!binderConfig.Binder.IsServiceContract(typeof(TService), out var primaryServiceName)) primaryServiceName = typeof(TService).Name;
-                    il.Emit(OpCodes.Ldstr, primaryServiceName + " / " + typeof(TChannel).Name);
+                    il.Emit(OpCodes.Ldstr, primaryServiceName + " / " + typeof(CallInvoker).Name);
                     il.Emit(OpCodes.Ret);
                     type.DefineMethodOverride(toString, baseToString);
                 }
@@ -243,21 +243,21 @@ namespace ProtoBuf.Grpc.Internal
                 cctor.Emit(OpCodes.Ret); // end the type initializer (after creating all the field types)
 
 #if NETSTANDARD2_0
-                var finalType = type.CreateTypeInfo()!;
+                concreteType = type.CreateTypeInfo()!;
 #else
-                var finalType = type.CreateType()!;
+                concreteType = type.CreateType()!;
 #endif
                 // assign the marshallers and invoke the init
                 foreach((var field, var name, var instance) in marshallers.Values)
                 {
-                    finalType.GetField(name, BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Public)!.SetValue(null, instance);
+                    concreteType.GetField(name, BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Public)!.SetValue(null, instance);
                 }
-                finalType.GetMethod(InitMethodName, BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Public)!.Invoke(null, Array.Empty<object>());
+                concreteType.GetMethod(InitMethodName, BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Public)!.Invoke(null, Array.Empty<object>());
 
                 // return the factory
-                var p = Expression.Parameter(typeof(TChannel), "channel");
-                return Expression.Lambda<Func<TChannel, TService>>(
-                    Expression.New(finalType.GetConstructor(new[] { typeof(TChannel) }), p), p).Compile();
+                var p = Expression.Parameter(typeof(CallInvoker), "channel");
+                return Expression.Lambda<Func<CallInvoker, TService>>(
+                    Expression.New(concreteType.GetConstructor(new[] { typeof(CallInvoker) }), p), p).Compile();
 
                 ConstructorBuilder? WritePassThruCtor<T>(MethodAttributes accessibility)
                 {
